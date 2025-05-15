@@ -1,0 +1,9 @@
+# gitcast_library/__init__.py
+# This file makes Python treat the 'gitcast_library' directory as a package.
+
+# You can optionally make classes easily importable from the package root:
+# from .config import AppConfig
+# from .orchestrator import GitCastOrchestrator
+# from .datasources import DataSource, GitRepoSource, ReleaseNotesSource, BlogDataSource
+# from .services import LanguageModelService, TextToSpeechService
+# from .utils import * # Or specific utils

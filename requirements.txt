@@ -1,0 +1,17 @@
+# requirements.txt for wizcast
+
+# For loading environment variables from .env files
+python-dotenv
+
+# For interacting with Google's Generative AI (Gemini)
+google-generativeai
+
+# For Google Cloud Text-to-Speech service
+google-cloud-texttospeech
+
+# For making HTTP requests (used for fetching web content)
+requests
+
+# For parsing HTML/XML (used for web scraping and cleaning Markdown)
+beautifulsoup4
+
