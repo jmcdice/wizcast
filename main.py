@@ -3,6 +3,7 @@
 
 import sys
 import os
+import logging
 
 # Add the project root to sys.path to allow imports from gitcast_library
 # This is useful if you run `python main.py` from the gitcast_project directory.
@@ -11,24 +12,31 @@ sys.path.insert(0, project_root)
 
 from gitcast_library.config import AppConfig
 from gitcast_library.orchestrator import GitCastOrchestrator
+from gitcast_library.utils import setup_logging
 
 def run_gitcast():
     try:
-        print("Initializing GitCast application...")
+        # Initialize configuration
         config = AppConfig()
+        
+        # Setup logging with configured options
+        log_level = getattr(logging, config.args.log_level)
+        logger = setup_logging(log_level=log_level, log_file=config.args.log_file)
+        
+        logger.info("Initializing GitCast application...")
         orchestrator = GitCastOrchestrator(config)
         return orchestrator.run()
     except FileNotFoundError as fnf_error:
-        print(f"ERROR: A required file or directory was not found: {fnf_error}")
+        logging.error(f"A required file or directory was not found: {fnf_error}")
         return 1
     except ValueError as val_error: # For config validation errors
-        print(f"ERROR: Configuration validation failed: {val_error}")
+        logging.error(f"Configuration validation failed: {val_error}")
         return 1
     except RuntimeError as rt_error: # For service initialization errors etc.
-        print(f"ERROR: A runtime issue occurred: {rt_error}")
+        logging.error(f"A runtime issue occurred: {rt_error}")
         return 1
     except Exception as e:
-        print(f"An unexpected critical error occurred: {e}")
+        logging.critical(f"An unexpected critical error occurred: {e}")
         import traceback
         traceback.print_exc()
         return 1

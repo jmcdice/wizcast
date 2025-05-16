@@ -10,11 +10,11 @@ from google.cloud import texttospeech as google_cloud_tts # Alias to avoid confu
 
 # Assuming utils.py and config.py are in the same package directory
 try:
-    from .utils import markdown_to_plain_text
+    from .utils import markdown_to_plain_text, logger
     from .config import AppConfig
 except ImportError:
     # Fallback for different execution context or testing
-    from utils import markdown_to_plain_text
+    from utils import markdown_to_plain_text, logger
     from config import AppConfig
 
 
@@ -33,7 +33,7 @@ class LanguageModelService:
         ]
 
     def generate_summary(self, system_prompt_text: str, user_prompt_text: str) -> Optional[str]:
-        print(f"    Sending request to Gemini ('{self.config.gemini_model_name}'). User prompt: ~{len(user_prompt_text)} chars. System prompt: ~{len(system_prompt_text)} chars.")
+        logger.info(f"Sending request to Gemini ('{self.config.gemini_model_name}'). User prompt: ~{len(user_prompt_text)} chars. System prompt: ~{len(system_prompt_text)} chars.")
         try:
             model_instance = genai.GenerativeModel(
                 self.config.gemini_model_name,
@@ -49,19 +49,19 @@ class LanguageModelService:
 
             if response.prompt_feedback and response.prompt_feedback.block_reason:
                 error_msg = f"Error: Prompt blocked by Gemini. Reason: {response.prompt_feedback.block_reason}"
-                print(f"    {error_msg}")
+                logger.error(error_msg)
                 return error_msg
             
             # More robust check for response content
             if not response.candidates:
                 error_msg = "Error: Gemini response contained no candidates."
-                print(f"    {error_msg} Full response: {response}")
+                logger.error(f"{error_msg} Full response: {response}")
                 return error_msg
             
             candidate = response.candidates[0]
             if not candidate.content or not candidate.content.parts:
                 error_msg = "Error: Gemini response candidate has no content or parts."
-                print(f"    {error_msg} Candidate: {candidate}")
+                logger.error(f"{error_msg} Candidate: {candidate}")
                 return error_msg
 
             # Assuming the first part is the text we need.
@@ -70,12 +70,12 @@ class LanguageModelService:
                 return candidate.content.parts[0].text
             else:
                 error_msg = "Error: Gemini response part does not contain text."
-                print(f"    {error_msg} Part: {candidate.content.parts[0]}")
+                logger.error(f"{error_msg} Part: {candidate.content.parts[0]}")
                 return error_msg
                 
         except Exception as e:
             error_msg = f"Error: Exception during Gemini API call - {str(e)}"
-            print(f"    {error_msg}")
+            logger.error(error_msg)
             # import traceback
             # traceback.print_exc() # For more detailed debugging if needed
             return error_msg
@@ -119,7 +119,7 @@ class TextToSpeechService:
                 # Now deal with the paragraph that didn't fit.
                 # If the paragraph itself is too large, it needs to be split.
                 if len(paragraph_bytes) > self.tts_chunk_limit_bytes:
-                    print(f"      TTS Chunker: Paragraph too long ({len(paragraph_bytes)} bytes), splitting by sentences.")
+                    logger.debug(f"TTS Chunker: Paragraph too long ({len(paragraph_bytes)} bytes), splitting by sentences.")
                     sentences = re.split(r'(?<=[.!?])\s+', paragraph) # Split by sentences
                     temp_sentence_chunk = ""
                     for sentence in sentences:
@@ -135,7 +135,7 @@ class TextToSpeechService:
                             if temp_sentence_chunk: chunks.append(temp_sentence_chunk)
                             # If a single sentence is still too long (rare for TTS limits, but possible)
                             if len(sentence_bytes) > self.tts_chunk_limit_bytes:
-                                print(f"        TTS Chunker: Sentence too long ({len(sentence_bytes)} bytes), hard splitting.")
+                                logger.debug(f"TTS Chunker: Sentence too long ({len(sentence_bytes)} bytes), hard splitting.")
                                 # Hard split the oversized sentence
                                 # This is a fallback; ideal would be more intelligent splitting.
                                 start_idx = 0
@@ -154,7 +154,7 @@ class TextToSpeechService:
                                         chunks.append(sub_sentence)
                                         start_idx += len(sub_sentence)
                                     else: # Should not happen if logic is correct
-                                        print("        TTS Chunker: Sub-sentence became empty during hard split. Breaking.")
+                                        logger.warning("TTS Chunker: Sub-sentence became empty during hard split. Breaking.")
                                         break 
                                 temp_sentence_chunk = "" # Reset after hard split
                             else: # Current sentence becomes the new temp_sentence_chunk
@@ -180,7 +180,7 @@ class TextToSpeechService:
                 audio_encoding=google_cloud_tts.AudioEncoding.MP3
                 # Can add speaking_rate, pitch, effects here if desired
             )
-            print(f"        Synthesizing speech for: {os.path.basename(output_filename)} ({len(text_chunk)} chars, {len(text_chunk.encode('utf-8'))} bytes)")
+            logger.info(f"Synthesizing speech for: {os.path.basename(output_filename)} ({len(text_chunk)} chars, {len(text_chunk.encode('utf-8'))} bytes)")
             
             request = google_cloud_tts.SynthesizeSpeechRequest(
                 input=input_text_proto,
@@ -191,10 +191,10 @@ class TextToSpeechService:
             
             with open(output_filename, "wb") as out_file:
                 out_file.write(response.audio_content)
-            print(f"        Audio content written to file: {output_filename}")
+            logger.info(f"Audio content written to file: {output_filename}")
             return True
         except Exception as e:
-            print(f"        ERROR: Failed to synthesize speech for {os.path.basename(output_filename)}: {e}")
+            logger.error(f"Failed to synthesize speech for {os.path.basename(output_filename)}: {e}")
             # import traceback
             # traceback.print_exc() # For detailed error during development
             return False
@@ -202,22 +202,22 @@ class TextToSpeechService:
     def synthesize_to_mp3(self, text_to_speak: str) -> List[str]:
         output_base = self.config.mp3_base_filepath # From AppConfig
         overwrite = self.config.overwrite_tts     # From AppConfig
-        print(f"    Processing TTS for base: {os.path.basename(output_base)}")
+        logger.info(f"Processing TTS for base: {os.path.basename(output_base)}")
 
         if not text_to_speak or not text_to_speak.strip():
-            print("    No text content provided for TTS. Skipping.")
+            logger.warning("No text content provided for TTS. Skipping.")
             return []
 
         plain_text = markdown_to_plain_text(text_to_speak)
         if not plain_text.strip():
-            print("    No text after Markdown conversion. Skipping TTS.")
+            logger.warning("No text after Markdown conversion. Skipping TTS.")
             return []
 
         text_chunks = self._chunk_text(plain_text)
         if not text_chunks:
-            print("    No text chunks to synthesize after chunking. Skipping TTS.")
+            logger.warning("No text chunks to synthesize after chunking. Skipping TTS.")
             return []
-        print(f"    Text divided into {len(text_chunks)} chunk(s) for TTS.")
+        logger.info(f"Text divided into {len(text_chunks)} chunk(s) for TTS.")
 
         part_mp3_files: List[str] = []
         synthesis_successful_for_all = True
@@ -227,7 +227,7 @@ class TextToSpeechService:
             part_mp3_files.append(part_filename)
             # Check if file exists and has content, and if overwrite is false
             if not overwrite and os.path.exists(part_filename) and os.path.getsize(part_filename) > 0:
-                print(f"      MP3 part exists and is not empty: {os.path.basename(part_filename)}. Skipping synthesis.")
+                logger.info(f"MP3 part exists and is not empty: {os.path.basename(part_filename)}. Skipping synthesis.")
                 continue
             if not self._synthesize_single_chunk(chunk, part_filename):
                 synthesis_successful_for_all = False
@@ -239,22 +239,22 @@ class TextToSpeechService:
         valid_part_files = [f for f in part_mp3_files if os.path.exists(f) and os.path.getsize(f) > 0]
 
         if not valid_part_files:
-            print("    TTS failed to produce any valid audio parts.")
+            logger.error("TTS failed to produce any valid audio parts.")
             return []
         if not synthesis_successful_for_all and len(valid_part_files) < len(text_chunks):
-            print("    Warning: Synthesis of one or more TTS chunks may have failed.")
+            logger.warning("Synthesis of one or more TTS chunks may have failed.")
 
         if len(valid_part_files) > 1:
             combined_mp3_filepath = output_base + "_full.mp3"
             # If combined file exists and we are not overwriting, return it.
             if not overwrite and os.path.exists(combined_mp3_filepath):
-                print(f"    Combined MP3 exists: {os.path.basename(combined_mp3_filepath)}. Skipping combination.")
+                logger.info(f"Combined MP3 exists: {os.path.basename(combined_mp3_filepath)}. Skipping combination.")
                 # Optionally, clean up individual parts if the combined one exists and is preferred
                 # for part_f_cleanup in valid_part_files:
                 #     if os.path.exists(part_f_cleanup): try: os.remove(part_f_cleanup) except OSError: pass
                 return [combined_mp3_filepath]
 
-            print(f"    Attempting to combine {len(valid_part_files)} MP3 parts into {os.path.basename(combined_mp3_filepath)}...")
+            logger.info(f"Attempting to combine {len(valid_part_files)} MP3 parts into {os.path.basename(combined_mp3_filepath)}...")
             concat_list_filename = output_base + "_concat_list.txt"
             ffmpeg_error_msg = None
             try:
@@ -286,12 +286,12 @@ class TextToSpeechService:
                 if process.returncode != 0:
                     ffmpeg_error_msg = f"ffmpeg failed with return code {process.returncode}: {process.stderr}"
                 else:
-                    print(f"    Successfully combined MP3s: {os.path.basename(combined_mp3_filepath)}")
+                    logger.info(f"Successfully combined MP3s: {os.path.basename(combined_mp3_filepath)}")
                     # Cleanup part files after successful combination
                     for part_f_cleanup in valid_part_files:
                         if os.path.exists(part_f_cleanup): 
                             try: os.remove(part_f_cleanup)
-                            except OSError as e_del: print(f"      Warning: Could not delete part file {part_f_cleanup}: {e_del}")
+                            except OSError as e_del: logger.warning(f"Could not delete part file {part_f_cleanup}: {e_del}")
                     return [combined_mp3_filepath]
 
             except FileNotFoundError: 
@@ -304,7 +304,7 @@ class TextToSpeechService:
                 if os.path.exists(concat_list_filename): os.remove(concat_list_filename)
             
             if ffmpeg_error_msg:
-                print(f"    ERROR combining MP3s: {ffmpeg_error_msg} Individual part files are kept.")
+                logger.error(f"ERROR combining MP3s: {ffmpeg_error_msg} Individual part files are kept.")
                 return valid_part_files # Return parts if combination failed
         
         elif len(valid_part_files) == 1:
@@ -314,24 +314,24 @@ class TextToSpeechService:
             final_single_mp3_filepath = output_base + ".mp3" 
 
             if os.path.abspath(single_part_file) == os.path.abspath(final_single_mp3_filepath):
-                 print(f"    Single audio part is already correctly named: {os.path.basename(final_single_mp3_filepath)}")
+                 logger.info(f"Single audio part is already correctly named: {os.path.basename(final_single_mp3_filepath)}")
                  return [final_single_mp3_filepath]
 
             if os.path.exists(final_single_mp3_filepath) and not overwrite:
-                print(f"    Target MP3 {os.path.basename(final_single_mp3_filepath)} exists. Original part {os.path.basename(single_part_file)} kept.")
+                logger.info(f"Target MP3 {os.path.basename(final_single_mp3_filepath)} exists. Original part {os.path.basename(single_part_file)} kept.")
                 # Decide whether to return the existing final or the new part.
                 # For consistency, if not overwriting, the existing final is what user expects.
                 return [final_single_mp3_filepath] 
             try:
                 if os.path.exists(final_single_mp3_filepath) and overwrite:
-                    print(f"    Overwriting existing target MP3: {os.path.basename(final_single_mp3_filepath)}")
+                    logger.info(f"Overwriting existing target MP3: {os.path.basename(final_single_mp3_filepath)}")
                     os.remove(final_single_mp3_filepath)
                 
                 os.rename(single_part_file, final_single_mp3_filepath)
-                print(f"    Single audio part renamed to: {os.path.basename(final_single_mp3_filepath)}")
+                logger.info(f"Single audio part renamed to: {os.path.basename(final_single_mp3_filepath)}")
                 return [final_single_mp3_filepath]
             except OSError as e_rename:
-                print(f"    Error renaming part {os.path.basename(single_part_file)} to {os.path.basename(final_single_mp3_filepath)}: {e_rename}. Part kept with original name.")
+                logger.error(f"Error renaming part {os.path.basename(single_part_file)} to {os.path.basename(final_single_mp3_filepath)}: {e_rename}. Part kept with original name.")
                 return [single_part_file] # Return the original part name if rename fails
         
         return [] # Should not be reached if valid_part_files had items.

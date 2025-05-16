@@ -12,10 +12,12 @@ try:
     from .utils import (
         load_file_content,
         parse_date_from_release_note_filename,
+        get_file_modification_date,
         fetch_url_content_text,
         parse_blog_post_date_from_text,
         get_monday_of_week,
-        urljoin
+        urljoin,
+        logger
     )
     from .config import AppConfig
     from .services import LanguageModelService
@@ -23,10 +25,12 @@ except ImportError:
     from utils import (
         load_file_content,
         parse_date_from_release_note_filename,
+        get_file_modification_date,
         fetch_url_content_text,
         parse_blog_post_date_from_text,
         get_monday_of_week,
-        urljoin
+        urljoin,
+        logger
     )
     from config import AppConfig
     from services import LanguageModelService
@@ -64,7 +68,7 @@ class GitRepoSource(DataSource):
                      ) -> Optional[str]:
         git_dir = os.path.join(self.repo_path, '.git')
         if not os.path.isdir(self.repo_path) or not os.path.isdir(git_dir):
-            print(f"  Error: '{self.repo_path}' ('{self.repo_name}') is not a valid git repository.")
+            logger.error(f"'{self.repo_path}' ('{self.repo_name}') is not a valid git repository.")
             return None
 
         days_to_scan = self.config.days_to_scan
@@ -72,7 +76,7 @@ class GitRepoSource(DataSource):
         max_length = self.config.max_git_log_length_per_repo
 
         since_date_display = (datetime.now().date() - timedelta(days=days_to_scan)).strftime("%Y-%m-%d")
-        print(f"  Fetching git log for '{self.repo_name}' from last {days_to_scan} days (since ~{since_date_display})...")
+        logger.info(f"Fetching git log for '{self.repo_name}' from last {days_to_scan} days (since ~{since_date_display})...")
         try:
             cmd = ['git', '-C', self.repo_path, 'log', '-p', f'--since="{days_to_scan} days ago"']
             if not include_merges:
@@ -83,13 +87,13 @@ class GitRepoSource(DataSource):
             log_output = result.stdout
 
             if result.stderr:
-                print(f"  Git log stderr for '{self.repo_name}' (non-fatal): {result.stderr.strip()}")
+                logger.warning(f"Git log stderr for '{self.repo_name}' (non-fatal): {result.stderr.strip()}")
             if not log_output.strip():
-                print(f"  No git commits found in '{self.repo_name}' for the specified period.")
+                logger.info(f"No git commits found in '{self.repo_name}' for the specified period.")
                 return None
 
             if len(log_output) > max_length:
-                print(f"  Warning: Git log for '{self.repo_name}' ({len(log_output)} chars) truncated to ~{max_length} chars.")
+                logger.warning(f"Git log for '{self.repo_name}' ({len(log_output)} chars) truncated to ~{max_length} chars.")
                 last_commit_end = log_output.rfind("COMMIT_END%n", 0, max_length)
                 if last_commit_end != -1:
                     log_output = log_output[:last_commit_end + len("COMMIT_END%n")]
@@ -98,9 +102,9 @@ class GitRepoSource(DataSource):
                 log_output += f"\n\n[GIT LOG FOR {self.repo_name} TRUNCATED]\n"
             return log_output
         except subprocess.CalledProcessError as e:
-            print(f"  Error getting git log for '{self.repo_name}': {e.stderr or e}")
+            logger.error(f"Error getting git log for '{self.repo_name}': {e.stderr or e}")
         except Exception as e:
-            print(f"  Unexpected error getting git log for '{self.repo_name}': {e}")
+            logger.error(f"Unexpected error getting git log for '{self.repo_name}': {e}")
         return None
 
 class ReleaseNotesSource(DataSource):
@@ -146,12 +150,12 @@ class ReleaseNotesSource(DataSource):
                      ) -> Optional[str]:
         release_notes_root = os.path.join(self.docs_repo_path, self.config.release_notes_base_path)
         if not os.path.isdir(release_notes_root):
-            print(f"  Info: Release Notes directory not found at '{release_notes_root}'. Skipping.")
+            logger.info(f"Release Notes directory not found at '{release_notes_root}'. Skipping.")
             return None
 
         target_monday = get_monday_of_week(reference_date)
         week_desc_for_search = f"Week of {target_monday.strftime('%B %d, %Y')}"
-        print(f"  Searching for release notes for {week_desc_for_search} in '{release_notes_root}'...")
+        logger.info(f"Searching for release notes for {week_desc_for_search} in '{release_notes_root}'...")
         
         all_relevant_notes_content_list: List[str] = []
         found_files_count = 0
@@ -160,78 +164,87 @@ class ReleaseNotesSource(DataSource):
             if os.path.isdir(subdir_path) and subdir_name != "templates":
                 for filename in os.listdir(subdir_path):
                     if filename.endswith((".mdx", ".md")):
-                        file_monday = parse_date_from_release_note_filename(filename, reference_date.year)
+                        full_filepath = os.path.join(subdir_path, filename)
+                        file_monday = parse_date_from_release_note_filename(
+                            filename, 
+                            reference_date.year,
+                            full_filepath=full_filepath
+                        )
                         if file_monday and file_monday == target_monday:
-                            print(f"    Found matching RN file: {os.path.join(subdir_name, filename)}")
-                            content = load_file_content(os.path.join(subdir_path, filename))
+                            # Log more detailed information about why we're matching this file
+                            filepath_info = os.path.join(subdir_name, filename)
+                            file_mod_time = get_file_modification_date(full_filepath)
+                            logger.info(f"Found matching RN file: {filepath_info} (Modified: {file_mod_time})")
+                            
+                            content = load_file_content(full_filepath)
                             if content:
                                 all_relevant_notes_content_list.append(f"\n--- Notes from: {subdir_name}/{filename} ---\n{content.strip()}")
                                 found_files_count +=1
         
         if not all_relevant_notes_content_list:
-            print(f"  No RN files found for {week_desc_for_search}.")
+            logger.info(f"No RN files found for {week_desc_for_search}.")
             return None
         
-        print(f"  Found {found_files_count} RN file(s) for {week_desc_for_search}.")
+        logger.info(f"Found {found_files_count} RN file(s) for {week_desc_for_search}.")
         combined_content_str = "\n\n".join(all_relevant_notes_content_list)
         
         if len(combined_content_str) <= self.config.max_release_notes_length:
-             print(f"  Combined RN content ({len(combined_content_str)} chars) is within the direct processing limit.")
+             logger.info(f"Combined RN content ({len(combined_content_str)} chars) is within the direct processing limit.")
              return combined_content_str
 
-        print(f"  Combined RN content ({len(combined_content_str)} chars) is large. Applying chunked summarization strategy.")
+        logger.info(f"Combined RN content ({len(combined_content_str)} chars) is large. Applying chunked summarization strategy.")
         if not llm_service:
-            print("    Warning: LLM service not available for ReleaseNotesSource chunked summarization. Truncating instead.")
+            logger.warning("LLM service not available for ReleaseNotesSource chunked summarization. Truncating instead.")
             return combined_content_str[:self.config.max_release_notes_length] + "\n\n[RELEASE NOTES CONTENT TRUNCATED - NO LLM FOR CHUNKING]"
 
         chunk_summary_prompt = load_file_content(self.config.rn_chunk_summary_prompt_filepath)
         if not chunk_summary_prompt:
-            print(f"    Error: Could not load RN chunk summary prompt from '{self.config.rn_chunk_summary_prompt_filepath}'. Truncating.")
+            logger.error(f"Could not load RN chunk summary prompt from '{self.config.rn_chunk_summary_prompt_filepath}'. Truncating.")
             return combined_content_str[:self.config.max_release_notes_length] + "\n\n[RN CONTENT TRUNCATED - CHUNK PROMPT MISSING]"
 
         text_chunks = self._chunk_text_by_paragraphs(combined_content_str, self.config.rn_summarization_chunk_char_limit)
         if not text_chunks:
-             print("    Warning: RN content could not be split into chunks. Returning original (potentially truncated).")
+             logger.warning("RN content could not be split into chunks. Returning original (potentially truncated).")
              return combined_content_str[:self.config.max_release_notes_length] + "\n\n[RN CONTENT TRUNCATED - CHUNKING FAILED]"
-        print(f"    RN content split into {len(text_chunks)} chunks for initial summarization.")
+        logger.info(f"RN content split into {len(text_chunks)} chunks for initial summarization.")
 
         individual_summaries: List[str] = []
         for i, chunk in enumerate(text_chunks):
-            print(f"      Summarizing RN chunk {i+1}/{len(text_chunks)} (length: {len(chunk)} chars)...")
+            logger.info(f"Summarizing RN chunk {i+1}/{len(text_chunks)} (length: {len(chunk)} chars)...")
             summary_of_chunk = llm_service.generate_summary(
                 system_prompt_text=chunk_summary_prompt,
                 user_prompt_text=chunk
             )
             if summary_of_chunk and not summary_of_chunk.lower().startswith("error:"):
                 individual_summaries.append(summary_of_chunk)
-                print(f"        Chunk {i+1} summarized successfully.")
+                logger.info(f"Chunk {i+1} summarized successfully.")
             else:
-                print(f"        Warning: Failed to summarize RN chunk {i+1}. Error: {summary_of_chunk}")
+                logger.warning(f"Failed to summarize RN chunk {i+1}. Error: {summary_of_chunk}")
                 individual_summaries.append(f"[Error summarizing chunk {i+1}. Content snippet: {chunk[:150]}...]")
         
         if not individual_summaries:
-            print("    Error: No summaries were generated from RN chunks. Cannot create final section.")
+            logger.error("No summaries were generated from RN chunks. Cannot create final section.")
             return "[Error: Failed to process release notes through chunked summarization.]"
 
         combined_summaries_text = "\n\n---\n\n".join(individual_summaries)
-        print(f"    All RN chunks summarized. Total length of combined intermediate summaries: {len(combined_summaries_text)} chars.")
+        logger.info(f"All RN chunks summarized. Total length of combined intermediate summaries: {len(combined_summaries_text)} chars.")
 
         final_rn_section_prompt = load_file_content(self.config.rn_combine_summaries_prompt_filepath)
         if not final_rn_section_prompt:
-            print(f"    Error: Could not load RN combine summaries prompt. Returning combined chunk summaries as is.")
+            logger.error(f"Could not load RN combine summaries prompt. Returning combined chunk summaries as is.")
             return combined_summaries_text
 
-        print("    Generating final coherent Release Notes section from combined summaries...")
+        logger.info("Generating final coherent Release Notes section from combined summaries...")
         final_release_notes_section = llm_service.generate_summary(
             system_prompt_text=final_rn_section_prompt,
             user_prompt_text=combined_summaries_text
         )
 
         if final_release_notes_section and not final_release_notes_section.lower().startswith("error:"):
-            print("    Final Release Notes section generated successfully.")
+            logger.info("Final Release Notes section generated successfully.")
             return final_release_notes_section
         else:
-            print(f"    Error generating final Release Notes section. Error: {final_release_notes_section}. Returning combined chunk summaries as fallback.")
+            logger.error(f"Error generating final Release Notes section. Error: {final_release_notes_section}. Returning combined chunk summaries as fallback.")
             return combined_summaries_text
 
     def get_section_header(self) -> str: 
@@ -248,7 +261,7 @@ class BlogDataSource(DataSource):
         self.blog_url = config.blog_url
 
     def _fetch_single_post_content(self, post_url: str, post_title: str) -> Optional[Dict[str, str]]:
-        print(f"      Fetching content for blog post: '{post_title}' from {post_url}")
+        logger.info(f"Fetching content for blog post: '{post_title}' from {post_url}")
         post_page_html = fetch_url_content_text(post_url)
         if not post_page_html: return None
 
@@ -273,11 +286,11 @@ class BlogDataSource(DataSource):
             max_len = self.config.max_blog_post_content_length
 
             if len(post_text) > max_len:
-                print(f"        Warning: Blog post '{post_title}' content long ({len(post_text)} chars), truncating.")
+                logger.warning(f"Blog post '{post_title}' content long ({len(post_text)} chars), truncating.")
                 post_text = post_text[:max_len] + "\n\n[BLOG POST CONTENT TRUNCATED]"
             return {"title": post_title, "url": post_url, "content": post_text}
         else:
-            print(f"        Could not extract main content from {post_url}")
+            logger.warning(f"Could not extract main content from {post_url}")
             return None
 
     def fetch_content(self, 
@@ -287,7 +300,7 @@ class BlogDataSource(DataSource):
         target_monday = get_monday_of_week(reference_date)
         target_sunday = target_monday + timedelta(days=6)
         week_of_str = target_monday.strftime('%B %d, %Y')
-        print(f"  Fetching recent blog posts from {self.blog_url} for the week of {week_of_str}...")
+        logger.info(f"Fetching recent blog posts from {self.blog_url} for the week of {week_of_str}...")
         
         main_page_html = fetch_url_content_text(self.blog_url)
         if not main_page_html: return None
@@ -298,11 +311,11 @@ class BlogDataSource(DataSource):
         article_elements = soup.find_all("article") 
         if not article_elements:
              article_elements = soup.find_all("div", class_=re.compile(r"post|entry|item|card|preview|blog-post", re.I))
-        print(f"    Found {len(article_elements)} potential article elements on the main blog page.")
+        logger.info(f"Found {len(article_elements)} potential article elements on the main blog page.")
 
         for article_el in article_elements:
             if len(collected_posts) >= self.config.max_blog_posts_to_fetch:
-                print(f"    Reached limit of {self.config.max_blog_posts_to_fetch} blog posts for the week.")
+                logger.info(f"Reached limit of {self.config.max_blog_posts_to_fetch} blog posts for the week.")
                 break
 
             title_text = "Untitled Post"
@@ -347,20 +360,20 @@ class BlogDataSource(DataSource):
 
             post_date = parse_blog_post_date_from_text(date_container_text)
             if post_date and (target_monday <= post_date <= target_sunday):
-                print(f"    Found relevant blog post: '{title_text}' (Published: {post_date}, URL: {post_url})")
+                logger.info(f"Found relevant blog post: '{title_text}' (Published: {post_date}, URL: {post_url})")
                 post_details = self._fetch_single_post_content(post_url, title_text)
                 if post_details:
                     collected_posts.append(post_details)
         
         if not collected_posts:
-            print(f"  No relevant blog posts found for the week of {week_of_str}.")
+            logger.info(f"No relevant blog posts found for the week of {week_of_str}.")
             return None
 
         output_parts = [
             f"--- Blog Post: {post['title']} ({post['url']}) ---\n{post['content'].strip()}\n--- End Blog Post ---"
             for post in collected_posts
         ]
-        print(f"  Successfully gathered {len(collected_posts)} recent blog post(s).")
+        logger.info(f"Successfully gathered {len(collected_posts)} recent blog post(s).")
         return "\n\n".join(output_parts) if output_parts else None
 
 
@@ -400,50 +413,50 @@ class CommunityThreadSource(DataSource):
                      ) -> Optional[str]:
         
         if not os.path.exists(self.thread_filepath):
-            print(f"  Info: Community thread file not found at '{self.thread_filepath}'. Skipping this source.")
+            logger.info(f"Community thread file not found at '{self.thread_filepath}'. Skipping this source.")
             return None
 
-        print(f"  Processing manual community thread from: {self.thread_filepath}")
+        logger.info(f"Processing manual community thread from: {self.thread_filepath}")
         raw_thread_content = load_file_content(self.thread_filepath)
 
         if not raw_thread_content or not raw_thread_content.strip():
-            print(f"  Warning: Community thread file '{self.thread_filepath}' is empty. Skipping.")
+            logger.warning(f"Community thread file '{self.thread_filepath}' is empty. Skipping.")
             return None
         
         # Optional: Truncate raw thread if it's excessively long before even preprocessing/LLM
         if len(raw_thread_content) > self.config.max_community_thread_raw_length:
-            print(f"  Warning: Raw community thread content ({len(raw_thread_content)} chars) exceeds limit, truncating.")
+            logger.warning(f"Raw community thread content ({len(raw_thread_content)} chars) exceeds limit, truncating.")
             raw_thread_content = raw_thread_content[:self.config.max_community_thread_raw_length] + \
                                  "\n\n[RAW THREAD CONTENT TRUNCATED BEFORE SUMMARIZATION]"
 
 
-        print("    Preprocessing community thread text...")
+        logger.info("Preprocessing community thread text...")
         processed_thread_text = self._preprocess_thread_text(raw_thread_content)
 
         if not processed_thread_text:
-            print("    Warning: Community thread text is empty after preprocessing. Skipping.")
+            logger.warning("Community thread text is empty after preprocessing. Skipping.")
             return None
 
         if not llm_service:
-            print("    Warning: LLM service not available to CommunityThreadSource. Cannot summarize. Skipping.")
+            logger.warning("LLM service not available to CommunityThreadSource. Cannot summarize. Skipping.")
             return None # Or return preprocessed text if that's ever useful as a fallback
 
         system_prompt = load_file_content(self.summary_prompt_filepath)
         if not system_prompt:
-            print(f"    Error: Could not load community thread summary prompt from '{self.summary_prompt_filepath}'. Skipping.")
+            logger.error(f"Could not load community thread summary prompt from '{self.summary_prompt_filepath}'. Skipping.")
             return None
 
-        print("    Summarizing community thread using LLM...")
+        logger.info("Summarizing community thread using LLM...")
         summary = llm_service.generate_summary(
             system_prompt_text=system_prompt,
             user_prompt_text=processed_thread_text # Send the preprocessed thread text
         )
 
         if summary and not summary.lower().startswith("error:"):
-            print("    Community thread summarized successfully.")
+            logger.info("Community thread summarized successfully.")
             # Optional: Add a small intro/outro here if needed for the podcast context
             # e.g., "From our community discussions this week:\n" + summary
             return summary
         else:
-            print(f"    Warning: Failed to summarize community thread. Error: {summary}")
+            logger.warning(f"Failed to summarize community thread. Error: {summary}")
             return f"[Error summarizing community thread from file: {os.path.basename(self.thread_filepath)}]"

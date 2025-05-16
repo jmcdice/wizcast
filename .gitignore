@@ -2,7 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.class
-creds/
 
 # C extensions
 *.so
@@ -173,3 +172,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Project specific
+creds/
+manual_inputs/
+output_wizcast/
+repos/
+

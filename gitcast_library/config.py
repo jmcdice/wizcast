@@ -1,14 +1,15 @@
 # gitcast_library/config.py
 import os
 import argparse
+import logging
 from dotenv import load_dotenv
 from datetime import datetime, date
 
 # Assuming utils.py is in the same directory or handled by PYTHONPATH
 try:
-    from .utils import get_monday_of_week, ensure_dir
+    from .utils import get_monday_of_week, ensure_dir, logger, setup_logging
 except ImportError:
-    from utils import get_monday_of_week, ensure_dir
+    from utils import get_monday_of_week, ensure_dir, logger, setup_logging
 
 
 class AppConfig:
@@ -53,6 +54,13 @@ class AppConfig:
         parser.add_argument('--include-merges', action='store_true', default=False, help="Include merge commits in git log.")
         parser.add_argument('--model', type=str, default="gemini-1.5-flash-latest", help="Gemini model.")
         parser.add_argument('--tts-voice', type=str, default="en-US-Chirp3-HD-Achernar", help="TTS voice.")
+        
+        # Logging Options
+        parser.add_argument('--log-level', type=str, default="INFO", 
+                            choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+                            help="Logging level.")
+        parser.add_argument('--log-file', type=str, default=None,
+                            help="Optional log file path. If not specified, logs will only be written to stdout.")
         
         # Skip Flags (Existing)
         parser.add_argument('--skip-blog', action='store_true', default=False, help="Skip fetching and summarizing blog posts.")
@@ -121,7 +129,7 @@ class AppConfig:
         ensure_dir(self.args.manual_inputs_dir) # Ensure manual_inputs directory exists
 
         if not os.path.isdir(self.args.repos_dir):
-            print(f"Warning: Repos dir '{self.args.repos_dir}' not found.")
+            logger.warning(f"Repos dir '{self.args.repos_dir}' not found.")
         
         if not self.args.skip_llm:
             if not os.path.exists(self.system_prompt_filepath):
@@ -136,7 +144,7 @@ class AppConfig:
         
         # Validate community thread input file if not skipping
         if not self.args.skip_community_thread and not os.path.exists(self.community_thread_input_filepath):
-            print(f"Warning: Community thread input file not found: {self.community_thread_input_filepath}. This source will be skipped.")
+            logger.warning(f"Community thread input file not found: {self.community_thread_input_filepath}. This source will be skipped.")
 
 
     # --- Convenience properties ---
